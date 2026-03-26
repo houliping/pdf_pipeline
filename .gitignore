@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# Large/temporary outputs
+analysis/
+chunked_jsonl_res/
+jsonl_res_sample/
+jsonl_res_sample_raw/
+selected_manifest.json
+selected_manifest_*.json
+*_run*/
+
+# Python tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
