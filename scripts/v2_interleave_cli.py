@@ -147,14 +147,18 @@ def run_analyze(args: argparse.Namespace) -> None:
     reservoir: List[Dict[str, Any]] = []
     total_seen = 0
     extra_match_count = 0  # img_num>0 AND language in zh/en AND layout_decision==PARSE
+    per_file_stats: Dict[str, Dict[str, Any]] = {}
     last_report_records = 0
     last_report_time = time.time()
     started = last_report_time
 
     for shard in shards:
+        shard_seen = 0
+        shard_extra_match_count = 0
         _log(f"[analyze] scanning shard={shard.shard_name}")
         for rec in iter_jsonl(shard.path):
             total_seen += 1
+            shard_seen += 1
             img_num_now = get_image_num(rec)
             lang_now = get_language(rec)
             lang_norm = lang_now.lower() if isinstance(lang_now, str) else None
@@ -163,6 +167,7 @@ def run_analyze(args: argparse.Namespace) -> None:
             is_zh_en = lang_norm in {"zh", "zh-cn", "zh_cn", "en", "english", "chinese"}
             if isinstance(img_num_now, int) and img_num_now > 0 and is_zh_en and layout_norm == "PARSE":
                 extra_match_count += 1
+                shard_extra_match_count += 1
 
             if len(reservoir) < reservoir_size:
                 reservoir.append(rec)
@@ -184,6 +189,16 @@ def run_analyze(args: argparse.Namespace) -> None:
 
             if args.max_records is not None and total_seen >= args.max_records:
                 break
+        per_file_stats[shard.shard_name] = {
+            "records_seen": shard_seen,
+            "extra_stats": {
+                "img_nonzero_and_lang_zh_en_and_layout_parse": {
+                    "count": shard_extra_match_count,
+                    "ratio": (shard_extra_match_count / shard_seen) if shard_seen > 0 else 0.0,
+                    "denominator": shard_seen,
+                }
+            },
+        }
         if args.max_records is not None and total_seen >= args.max_records:
             break
 
@@ -227,6 +242,17 @@ def run_analyze(args: argparse.Namespace) -> None:
         if cat_name:
             cat_names.append(cat_name)
 
+    overall_stats = {
+        "records_seen": total_seen,
+        "extra_stats": {
+            "img_nonzero_and_lang_zh_en_and_layout_parse": {
+                "count": extra_match_count,
+                "ratio": (extra_match_count / total_seen) if total_seen > 0 else 0.0,
+                "denominator": total_seen,
+            }
+        },
+    }
+
     stats = {
         "reservoir_size": len(reservoir),
         "total_seen": total_seen,
@@ -237,13 +263,10 @@ def run_analyze(args: argparse.Namespace) -> None:
         "language_count": {},
         "category_code_count": {},
         "category_name_count": {},
-        "extra_stats": {
-            "img_nonzero_and_lang_zh_en_and_layout_parse": {
-                "count": extra_match_count,
-                "ratio": (extra_match_count / total_seen) if total_seen > 0 else 0.0,
-                "denominator": total_seen,
-            }
-        },
+        "overall_stats": overall_stats,
+        "per_file_stats": per_file_stats,
+        # Backward compatibility
+        "extra_stats": overall_stats["extra_stats"],
     }
     from collections import Counter
 
