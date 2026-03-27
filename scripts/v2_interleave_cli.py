@@ -17,6 +17,7 @@ if PROJECT_ROOT not in sys.path:
 from v2_interleave_pipeline.filters.gates import (
     GatesConfig,
     get_language,
+    get_main_category,
     get_main_category_code,
     get_total_token,
     passes_gates,
@@ -188,6 +189,7 @@ def run_analyze(args: argparse.Namespace) -> None:
     nsfw_decisions: List[str] = []
     languages: List[str] = []
     cat_codes: List[str] = []
+    cat_names: List[str] = []
 
     cat_map = load_category_code_name_map(args.category_code_txt) if args.category_code_txt else {}
 
@@ -208,9 +210,11 @@ def run_analyze(args: argparse.Namespace) -> None:
         lang = get_language(rec)
         if isinstance(lang, str):
             languages.append(lang)
-        cat = rec.get("meta_info", {}).get("category_cls_v1.3", {}).get("category_code")
-        if isinstance(cat, str) and cat:
-            cat_codes.append(cat)
+        cat_code, cat_name, _cat_score = get_main_category(rec)
+        if cat_code:
+            cat_codes.append(cat_code)
+        if cat_name:
+            cat_names.append(cat_name)
 
     stats = {
         "reservoir_size": len(reservoir),
@@ -221,6 +225,7 @@ def run_analyze(args: argparse.Namespace) -> None:
         "nsfw_decisions_count": {},
         "language_count": {},
         "category_code_count": {},
+        "category_name_count": {},
     }
     from collections import Counter
 
@@ -228,6 +233,7 @@ def run_analyze(args: argparse.Namespace) -> None:
     stats["nsfw_decisions_count"] = Counter(nsfw_decisions)
     stats["language_count"] = Counter(languages)
     stats["category_code_count"] = Counter(cat_codes)
+    stats["category_name_count"] = Counter(cat_names)
 
     out_analysis = os.path.join(args.out_dir, "analysis")
     _maybe_mkdir(out_analysis)
@@ -277,8 +283,14 @@ def run_analyze(args: argparse.Namespace) -> None:
     save_hist(token_vals, os.path.join(out_analysis, "hist_clean_total_token.png"), "clean_total_token (reservoir)")
     save_hist(image_vals, os.path.join(out_analysis, "hist_clean_image_num.png"), "clean_image_num (reservoir)")
     save_bar(stats["language_count"], os.path.join(out_analysis, "bar_language.png"), "language_fasttext.language (top)")
-    # Visualize by Chinese name; keep code for disambiguation.
-    if cat_map:
+    # Visualize category name if present; fallback to code->txt mapping; otherwise show code.
+    if stats["category_name_count"]:
+        save_bar(
+            stats["category_name_count"],
+            os.path.join(out_analysis, "bar_main_category_name.png"),
+            "category_name (top)",
+        )
+    elif cat_map:
         top_cats = sorted(stats["category_code_count"].items(), key=lambda x: x[1], reverse=True)[:30]
         label_map = {code: f"{cat_map.get(code, code)}({code})" for code, _ in top_cats}
         labels = [label_map[code] for code, _ in top_cats]
@@ -294,10 +306,17 @@ def run_analyze(args: argparse.Namespace) -> None:
             plt.savefig(os.path.join(out_analysis, "bar_main_category_cn.png"))
             plt.close()
         except Exception:
-            # fallback: code-only
-            save_bar(stats["category_code_count"], os.path.join(out_analysis, "bar_main_category_code.png"), "category_code (top)")
+            save_bar(
+                stats["category_code_count"],
+                os.path.join(out_analysis, "bar_main_category_code.png"),
+                "category_code (top)",
+            )
     else:
-        save_bar(stats["category_code_count"], os.path.join(out_analysis, "bar_main_category_code.png"), "category_code (top)")
+        save_bar(
+            stats["category_code_count"],
+            os.path.join(out_analysis, "bar_main_category_code.png"),
+            "category_code (top)",
+        )
     save_bar(stats["layout_decisions_count"], os.path.join(out_analysis, "bar_layout_decision.png"), "layout decision")
     save_bar(stats["nsfw_decisions_count"], os.path.join(out_analysis, "bar_nsfw_decision.png"), "nsfw decision")
     _log(f"[analyze] plot stage done in {time.time() - t_plot:.1f}s")

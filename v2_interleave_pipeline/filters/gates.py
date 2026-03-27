@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Optional, Sequence, Set, Tuple, Union
 
 
 def _get(d: Dict[str, Any], path: Sequence[str], default: Any = None) -> Any:
@@ -57,13 +57,49 @@ def get_language(record: Dict[str, Any]) -> Optional[str]:
     return lang if isinstance(lang, str) else None
 
 
+def get_main_category(record: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[float]]:
+    """
+    Compatible with:
+    - dict schema:
+        "category_cls_v1.3": { "category_name": "...", "category_code": "...", "score": 0.37 }
+    - list schema:
+        "category_cls_v1.3": [ { "category_name": "...", "category_code": "...", "score": 0.63 }, ... ]
+
+    Returns: (category_code, category_name, score) for the best item (max score) when list.
+    """
+    obj = _get(record, ["meta_info", "category_cls_v1.3"], default=None)
+
+    def parse_one(d: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[float]]:
+        code = d.get("category_code")
+        name = d.get("category_name")
+        score = d.get("score")
+        code_s = code if isinstance(code, str) else None
+        name_s = name if isinstance(name, str) else None
+        score_f = float(score) if isinstance(score, (int, float)) else None
+        return code_s, name_s, score_f
+
+    if isinstance(obj, dict):
+        return parse_one(obj)
+
+    if isinstance(obj, list):
+        best: Tuple[Optional[str], Optional[str], Optional[float]] = (None, None, None)
+        best_score = float("-inf")
+        for it in obj:
+            if not isinstance(it, dict):
+                continue
+            code, name, score = parse_one(it)
+            s = score if score is not None else float("-inf")
+            if s > best_score:
+                best_score = s
+                best = (code, name, score)
+        return best
+
+    return (None, None, None)
+
+
 def get_main_category_code(record: Dict[str, Any]) -> Optional[str]:
-    """
-    Expected schema:
-      "meta_info.category_cls_v1.3": { "category_name": "...", "category_code": "0205", "score": 0.37 }
-    """
-    cc = _get(record, ["meta_info", "category_cls_v1.3", "category_code"], default=None)
-    return cc if isinstance(cc, str) else None
+    code, _, _ = get_main_category(record)
+    return code
 
 
 @dataclass(frozen=True)
