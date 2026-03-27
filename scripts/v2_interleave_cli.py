@@ -6,6 +6,7 @@ import json
 import os
 import random
 import sys
+import time
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -59,6 +60,11 @@ def load_category_code_name_map(txt_path: str) -> Dict[str, str]:
 def _load_selected_manifest(selected_manifest: str) -> Dict[str, Any]:
     with open(selected_manifest, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _log(msg: str) -> None:
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now}] {msg}", flush=True)
 
 
 def _iter_passed_records_for_file(
@@ -127,15 +133,23 @@ def dedupe_output_jsonl_dir(input_dir: str, output_dir: str) -> None:
 
 
 def run_analyze(args: argparse.Namespace) -> None:
+    t0 = time.time()
     # Reservoir sample lines for viz
     shards = list_jsonl_shards(args.jsonl_dir)
+    _log(f"[analyze] shards={len(shards)} jsonl_dir={args.jsonl_dir}")
     reservoir_size = int(args.viz_reservoir_size)
     rng = random.Random(args.seed)
+    report_every_records = max(1, int(args.report_every_records))
+    report_every_seconds = max(1, int(args.report_every_seconds))
 
     reservoir: List[Dict[str, Any]] = []
     total_seen = 0
+    last_report_records = 0
+    last_report_time = time.time()
+    started = last_report_time
 
     for shard in shards:
+        _log(f"[analyze] scanning shard={shard.shard_name}")
         for rec in iter_jsonl(shard.path):
             total_seen += 1
             if len(reservoir) < reservoir_size:
@@ -145,12 +159,29 @@ def run_analyze(args: argparse.Namespace) -> None:
                 if j < reservoir_size:
                     reservoir[j] = rec
 
+            now = time.time()
+            if (total_seen - last_report_records >= report_every_records) or (now - last_report_time >= report_every_seconds):
+                elapsed = max(1e-6, now - started)
+                speed = total_seen / elapsed
+                _log(
+                    f"[analyze] progress records={total_seen} reservoir={len(reservoir)} "
+                    f"speed={speed:.1f} rec/s elapsed={elapsed:.1f}s"
+                )
+                last_report_records = total_seen
+                last_report_time = now
+
             if args.max_records is not None and total_seen >= args.max_records:
                 break
         if args.max_records is not None and total_seen >= args.max_records:
             break
 
+    _log(
+        f"[analyze] scan finished records={total_seen} reservoir={len(reservoir)} "
+        f"elapsed={time.time()-started:.1f}s"
+    )
+
     # Collect features
+    t_collect = time.time()
     token_vals: List[int] = []
     image_vals: List[int] = []
     layout_decisions: List[str] = []
@@ -202,8 +233,14 @@ def run_analyze(args: argparse.Namespace) -> None:
     _maybe_mkdir(out_analysis)
     with open(os.path.join(out_analysis, "reservoir_stats.json"), "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
+    _log(f"[analyze] wrote reservoir_stats.json in {time.time() - t_collect:.1f}s")
 
     # Plot
+    if args.no_plot:
+        _log("[analyze] --no_plot enabled, skip plotting and finish.")
+        return
+
+    t_plot = time.time()
     try:
         import matplotlib
 
@@ -263,13 +300,16 @@ def run_analyze(args: argparse.Namespace) -> None:
         save_bar(stats["category_code_count"], os.path.join(out_analysis, "bar_main_category_code.png"), "category_code (top)")
     save_bar(stats["layout_decisions_count"], os.path.join(out_analysis, "bar_layout_decision.png"), "layout decision")
     save_bar(stats["nsfw_decisions_count"], os.path.join(out_analysis, "bar_nsfw_decision.png"), "nsfw decision")
+    _log(f"[analyze] plot stage done in {time.time() - t_plot:.1f}s")
 
     # Simple threshold sweep for token_total_min
     if args.sweep_token_total_min_list:
+        t_sweep = time.time()
         token_mins = [int(x) for x in args.sweep_token_total_min_list.split(",") if x.strip()]
         if token_mins:
             sweep_rows = []
             for tmin in token_mins:
+                _log(f"[analyze] sweep token_total_min={tmin}")
                 sweep_cfg = GatesConfig(
                     min_image_num=int(args.base_min_image_num),
                     token_total_min=int(tmin),
@@ -286,6 +326,9 @@ def run_analyze(args: argparse.Namespace) -> None:
                     if passes_gates(rec, sweep_cfg):
                         pass_cnt += 1
                 sweep_rows.append({"token_total_min": tmin, "pass_cnt": pass_cnt, "reservoir_size": len(reservoir)})
+                _log(
+                    f"[analyze] sweep result token_total_min={tmin} pass_cnt={pass_cnt}/{len(reservoir)}"
+                )
 
             with open(os.path.join(out_analysis, "sweep_token_total_min.json"), "w", encoding="utf-8") as f:
                 json.dump(sweep_rows, f, ensure_ascii=False, indent=2)
@@ -306,6 +349,9 @@ def run_analyze(args: argparse.Namespace) -> None:
                 plt.close()
             except Exception:
                 pass
+        _log(f"[analyze] sweep stage done in {time.time() - t_sweep:.1f}s")
+
+    _log(f"[analyze] all done in {time.time() - t0:.1f}s -> {out_analysis}")
 
 
 def run_select(args: argparse.Namespace) -> None:
@@ -468,6 +514,9 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--max_records", type=int, default=None)
     pa.add_argument("--seed", type=int, default=1337)
     pa.add_argument("--num_workers", type=int, default=1)  # reserved
+    pa.add_argument("--report_every_records", type=int, default=20000)
+    pa.add_argument("--report_every_seconds", type=int, default=10)
+    pa.add_argument("--no_plot", action="store_true")
     pa.add_argument(
         "--category_code_txt",
         type=str,
