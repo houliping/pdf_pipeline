@@ -16,6 +16,7 @@ if PROJECT_ROOT not in sys.path:
 
 from v2_interleave_pipeline.filters.gates import (
     GatesConfig,
+    get_image_num,
     get_language,
     get_main_category,
     get_main_category_code,
@@ -145,6 +146,7 @@ def run_analyze(args: argparse.Namespace) -> None:
 
     reservoir: List[Dict[str, Any]] = []
     total_seen = 0
+    extra_match_count = 0  # img_num>0 AND language in zh/en AND layout_decision==PARSE
     last_report_records = 0
     last_report_time = time.time()
     started = last_report_time
@@ -153,6 +155,15 @@ def run_analyze(args: argparse.Namespace) -> None:
         _log(f"[analyze] scanning shard={shard.shard_name}")
         for rec in iter_jsonl(shard.path):
             total_seen += 1
+            img_num_now = get_image_num(rec)
+            lang_now = get_language(rec)
+            lang_norm = lang_now.lower() if isinstance(lang_now, str) else None
+            layout_now = rec.get("meta_info", {}).get("origin_pdf_layout_score", {}).get("decision")
+            layout_norm = layout_now.upper() if isinstance(layout_now, str) else None
+            is_zh_en = lang_norm in {"zh", "zh-cn", "zh_cn", "en", "english", "chinese"}
+            if isinstance(img_num_now, int) and img_num_now > 0 and is_zh_en and layout_norm == "PARSE":
+                extra_match_count += 1
+
             if len(reservoir) < reservoir_size:
                 reservoir.append(rec)
             else:
@@ -226,6 +237,13 @@ def run_analyze(args: argparse.Namespace) -> None:
         "language_count": {},
         "category_code_count": {},
         "category_name_count": {},
+        "extra_stats": {
+            "img_nonzero_and_lang_zh_en_and_layout_parse": {
+                "count": extra_match_count,
+                "ratio": (extra_match_count / total_seen) if total_seen > 0 else 0.0,
+                "denominator": total_seen,
+            }
+        },
     }
     from collections import Counter
 
