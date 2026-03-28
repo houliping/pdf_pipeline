@@ -456,6 +456,24 @@ def run_analyze(args: argparse.Namespace) -> None:
     _log(f"[analyze] all done in {time.time() - t0:.1f}s -> {out_analysis}")
 
 
+def run_make_data(args: argparse.Namespace) -> None:
+    from v2_interleave_pipeline.make_pipeline.config_loader import load_make_config
+    from v2_interleave_pipeline.make_pipeline.runner import run_make_data_pool
+
+    cfg = load_make_config(args.config)
+    if cfg.run_mode != "make_data":
+        print(f"WARN: run_mode={cfg.run_mode!r} (expected make_data); continuing.")
+    run_make_data_pool(
+        pool_root=args.pool_root,
+        dataset_name=args.dataset_name or None,
+        jsonl_dir_name=args.jsonl_dir_name,
+        jsonl_glob=args.jsonl_glob,
+        out_root=args.out_root,
+        output_version=args.output_version,
+        cfg=cfg,
+    )
+
+
 def run_aggregate_stats(args: argparse.Namespace) -> None:
     from v2_interleave_pipeline.viz.stats_aggregate import write_pooled_stats_json
 
@@ -680,6 +698,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pag.set_defaults(func=lambda args: run_aggregate_stats(args))
 
+    md = sub.add_parser(
+        "make-data",
+        help="数据制作：按 config 门控筛选，可选章节切分；输出到 out_root/output_version/<dataset>/jsonl_res/",
+    )
+    md.add_argument(
+        "--run_mode",
+        default="make_data",
+        help="与 config 中 run_mode 一致，当前仅支持数据制作 make_data",
+    )
+    md.add_argument(
+        "--pool_root",
+        required=True,
+        help="输入数据池根目录（其下为各 dataset 子目录）",
+    )
+    md.add_argument(
+        "--out_root",
+        required=True,
+        help="输出根目录；真实输出为 out_root/<output_version>/...",
+    )
+    md.add_argument(
+        "--output_version",
+        required=True,
+        help="本次数据制作版本名，如 v20260328 或 exp1",
+    )
+    md.add_argument(
+        "--config",
+        required=True,
+        help="JSON 配置文件：gates + chapter_split 等",
+    )
+    md.add_argument("--dataset_name", default="", help="只处理该数据集；默认处理 pool_root 下全部子目录")
+    md.add_argument("--jsonl_dir_name", default="jsonl_res")
+    md.add_argument("--jsonl_glob", default="data_*.jsonl")
+    md.set_defaults(func=run_make_data)
+
     # select
     ps = sub.add_parser("select", help="select pdf_md5 with category quotas (two-phase)")
     ps.add_argument("--root", required=False, default=".")
@@ -738,7 +790,7 @@ def main() -> None:
     p = build_parser()
     args = p.parse_args()
 
-    if args.cmd == "aggregate-stats":
+    if args.cmd in ("aggregate-stats", "make-data"):
         args.func(args)
         return
 

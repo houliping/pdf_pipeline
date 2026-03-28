@@ -106,6 +106,7 @@ def get_main_category_code(record: Dict[str, Any]) -> Optional[str]:
 class GatesConfig:
     # images gating
     min_image_num: int = 1
+    max_image_num: int = 10**18
 
     # token length gating
     token_total_min: int = 0
@@ -132,6 +133,8 @@ def passes_gates(record: Dict[str, Any], cfg: GatesConfig) -> bool:
     if img_num is None:
         return False
     if img_num < cfg.min_image_num:
+        return False
+    if img_num > cfg.max_image_num:
         return False
 
     # token length
@@ -178,7 +181,12 @@ def passes_gates(record: Dict[str, Any], cfg: GatesConfig) -> bool:
         ch = record.get("meta_info", {}).get("chapter_info")
         if not isinstance(ch, dict):
             return False
-        level_set = {v for v in ch.values() if isinstance(v, int)}
+        level_set: Set[int] = set()
+        for v in ch.values():
+            try:
+                level_set.add(int(v))
+            except (TypeError, ValueError):
+                pass
         if cfg.chapter_level not in level_set:
             return False
 

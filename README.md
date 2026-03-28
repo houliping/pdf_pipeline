@@ -111,3 +111,43 @@ python scripts/v2_interleave_cli.py chunk \
 
 会直接抛出异常并附带 `middle.json` 的 keys 片段，方便你对 adapter 做针对性优化。
 
+## 正式流程：数据池筛选 + 章节切分（I/O 与输入池同构）
+
+下一阶段在**不改动输入池目录结构语义**的前提下，从整池多数据集中做门控筛选，并对需要切分的行按 `meta_info.chapter_info`（及你方单独实现的切分脚本）拆成多行。可用本地小集 **`arxiv_20251203`** 做联调。
+
+### 输入（与现有一致）
+
+- **池根目录** `POOL_ROOT`：其下为 N 个数据集目录，例如 `POOL_ROOT/<dataset_name>/`。
+- **JSONL 树**（默认）：`POOL_ROOT/<dataset_name>/<jsonl_dir_name>/data_*.jsonl`（默认 `jsonl_dir_name=jsonl_res`）。
+- 每行一条 interleave 记录，字段沿用上文「数据约定」；切分阶段若需 `middle.json` 等，仍通过行内 `meta_info` 已有地址解析（与现有 `chunk` 一致）。
+
+### 输出（与输入格式、相对路径一致）
+
+- **另选输出池根** `OUT_ROOT` 与**输出版本名** `output_version`（不要覆盖原池）。目录层级为：  
+  `OUT_ROOT/<output_version>/<dataset_name>/<jsonl_dir_name>/<shard>.jsonl`  
+  与输入在 `<dataset_name>/<jsonl_dir_name>/<shard>.jsonl` 上**同构**，仅多一层版本目录。
+- **行级语义**：
+  - **筛选**：只保留满足阈值/门控的行；未命中则**不写**对应输出（或等价于从该 shard 中省略该行）。
+  - **切分**：同一条输入行可变为 **0 条**（整行被筛掉）、**1 条**（不切分，仅过滤）、或 **k 条**（按 `chapter_info` 切成 k 条子记录）。子记录仍写入**同一 shard 文件**（按约定顺序追加），保证「路径同构」。
+- **顺序建议**（实现时固定一种策略即可）：按输入 shard 内行顺序；若一行扩成多行，块顺序与切分脚本返回顺序一致。
+
+### 与现有子命令的关系
+
+- 门控字段与 `select`/`emit` 使用的 `GatesConfig` 对齐即可复用阈值语义。
+- **章节切分**实现于 `v2_interleave_pipeline/chapter_process/`，由 `make-data` 调用。
+
+### `make-data`（数据制作模式）
+
+- **输出路径**（带版本目录）：`OUT_ROOT/<output_version>/<dataset_name>/<jsonl_dir_name>/<shard>.jsonl`，与输入池在 `<dataset_name>/...` 以下**相对路径一致**，仅多一层 `output_version`。
+- **配置**：JSON，见 `configs/make_data.example.json`（`gates`：图片/token/layout/nsfw/language 等；`chapter_split.enabled`：是否按章节切分；`dedupe_pdf_md5`：整集内同一 `pdf_md5` 只保留首次出现的行）。
+
+```bash
+python scripts/v2_interleave_cli.py make-data \
+  --pool_root /path/to/V2_InterleaveDataPool \
+  --out_root /path/to/output_pool \
+  --output_version v20260328 \
+  --config configs/make_data.example.json \
+  --dataset_name arxiv_20251203
+```
+
+- 汇总写入：`OUT_ROOT/<output_version>/make_data_summary.json`。

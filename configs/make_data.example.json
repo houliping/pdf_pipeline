@@ -1,0 +1,26 @@
+{
+  "run_mode": "make_data",
+  "dedupe_pdf_md5": true,
+  "emit_original_when_split_empty": true,
+  "gates": {
+    "min_image_num": 1,
+    "max_image_num": 99999,
+    "token_total_min": 0,
+    "token_total_max": 2000000,
+    "layout_decision_ok": ["PARSE"],
+    "layout_score_min": null,
+    "nsfw_decision_ok": null,
+    "nsfw_score_max": null,
+    "languages_ok": ["en", "zh"],
+    "chapter_level": 1
+  },
+  "chapter_split": {
+    "enabled": true,
+    "read_mode": "read_panguml",
+    "min_page_num": 15,
+    "max_page_num": 100,
+    "min_imgs_count": 1,
+    "min_texts_len": 100,
+    "verbose": false
+  }
+}
