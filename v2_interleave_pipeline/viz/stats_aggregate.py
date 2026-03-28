@@ -34,6 +34,28 @@ def _minmax_merge(
     return cur_min, cur_max
 
 
+def records_seen_from_saved(obj: Dict[str, Any]) -> int:
+    """
+    Row count for one subset (all jsonl lines scanned in analyze).
+    Supports current and older reservoir_stats.json shapes.
+    """
+    for key in ("records_seen", "total_seen"):
+        v = obj.get(key)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                pass
+    o = obj.get("overall_stats") or {}
+    v = o.get("records_seen")
+    if v is not None:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
 def extract_full_stats_from_saved(obj: Dict[str, Any]) -> Dict[str, Any]:
     """Support new `full_stats` block and legacy top-level keys."""
     if "full_stats" in obj and isinstance(obj["full_stats"], dict):
@@ -153,13 +175,14 @@ def aggregate_stats_from_out_root(
         datasets_map[name] = data
         per_full.append(extract_full_stats_from_saved(data))
         extra_blocks.append(extract_extra_stats(data))
-        total_records += int(data.get("records_seen") or 0)
+        total_records += records_seen_from_saved(data)
 
     combined_full = build_combined_full_stats(per_full)
     combined = {
         "records_seen": total_records,
         "full_stats": combined_full,
         "extra_stats": merge_extra_stats(extra_blocks, total_records),
+        "description": "Pool-level: sum over subsets; each dimension count is sum of per-subset full_stats (all jsonl lines per subset).",
     }
 
     return names, datasets_map, combined
@@ -171,10 +194,12 @@ def write_pooled_stats_json(
     datasets_list_path: Optional[str] = None,
 ) -> Tuple[str, int]:
     names, datasets_map, combined = aggregate_stats_from_out_root(out_root, datasets_list_path)
+    ds_keys = [n for n in names if n in datasets_map]
     payload = {
         "out_root": os.path.abspath(out_root),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "dataset_names": [n for n in names if n in datasets_map],
+        "dataset_names": ds_keys,
+        "subset_count": len(ds_keys),
         "datasets": datasets_map,
         "combined": combined,
     }

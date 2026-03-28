@@ -137,9 +137,12 @@ def dedupe_output_jsonl_dir(input_dir: str, output_dir: str) -> None:
 
 def run_analyze(args: argparse.Namespace) -> None:
     t0 = time.time()
-    # Reservoir sample lines for viz; full-dataset counters in one pass (not per jsonl shard).
-    shards = list_jsonl_shards(args.jsonl_dir)
-    _log(f"[analyze] shards={len(shards)} jsonl_dir={args.jsonl_dir}")
+    # Reservoir sample lines for viz; full-dataset counters in one pass over every line in every jsonl file.
+    glob_pat = args.jsonl_glob
+    shards = list_jsonl_shards(args.jsonl_dir, pattern=glob_pat)
+    _log(f"[analyze] jsonl_glob={glob_pat!r} shards={len(shards)} jsonl_dir={args.jsonl_dir}")
+    if not shards:
+        _log(f"[analyze] WARN: no files matched glob under jsonl_dir (stats will be empty)")
     reservoir_size = int(args.viz_reservoir_size)
     rng = random.Random(args.seed)
     report_every_records = max(1, int(args.report_every_records))
@@ -291,8 +294,15 @@ def run_analyze(args: argparse.Namespace) -> None:
 
     stats = {
         "dataset_name": args.dataset_name,
+        "records_seen": total_seen,
         "reservoir_size": len(reservoir),
         "total_seen": total_seen,
+        "stats_scope": "All valid JSON object lines in all jsonl files under jsonl_dir (see jsonl_scan). full_stats counts every such line.",
+        "jsonl_scan": {
+            "glob_pattern": glob_pat,
+            "jsonl_dir": os.path.abspath(args.jsonl_dir),
+            "file_count": len(shards),
+        },
         "full_stats": full_stats,
         "reservoir_sample": reservoir_sample,
         # Top-level counts = full dataset (same keys as before; semantics fixed)
@@ -612,6 +622,11 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--root", required=False, default=".")
     pa.add_argument("--dataset_name", required=True)
     pa.add_argument("--jsonl_dir_name", default="jsonl_res")
+    pa.add_argument(
+        "--jsonl_glob",
+        default="data_*.jsonl",
+        help="glob relative to jsonl dir; all matches are read in sorted order (default: data_*.jsonl)",
+    )
     pa.add_argument("--out_dir", required=True)
     pa.add_argument("--viz_reservoir_size", type=int, default=200000)
     pa.add_argument("--max_records", type=int, default=None)
