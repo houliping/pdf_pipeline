@@ -7,6 +7,7 @@ import os
 import random
 import sys
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -136,7 +137,7 @@ def dedupe_output_jsonl_dir(input_dir: str, output_dir: str) -> None:
 
 def run_analyze(args: argparse.Namespace) -> None:
     t0 = time.time()
-    # Reservoir sample lines for viz
+    # Reservoir sample lines for viz; full-dataset counters in one pass (not per jsonl shard).
     shards = list_jsonl_shards(args.jsonl_dir)
     _log(f"[analyze] shards={len(shards)} jsonl_dir={args.jsonl_dir}")
     reservoir_size = int(args.viz_reservoir_size)
@@ -147,18 +148,23 @@ def run_analyze(args: argparse.Namespace) -> None:
     reservoir: List[Dict[str, Any]] = []
     total_seen = 0
     extra_match_count = 0  # img_num>0 AND language in zh/en AND layout_decision==PARSE
-    per_file_stats: Dict[str, Dict[str, Any]] = {}
+    full_layout = Counter()
+    full_nsfw = Counter()
+    full_lang = Counter()
+    full_cat_code = Counter()
+    full_cat_name = Counter()
+    token_min_full: Optional[int] = None
+    token_max_full: Optional[int] = None
+    img_min_full: Optional[int] = None
+    img_max_full: Optional[int] = None
     last_report_records = 0
     last_report_time = time.time()
     started = last_report_time
 
     for shard in shards:
-        shard_seen = 0
-        shard_extra_match_count = 0
         _log(f"[analyze] scanning shard={shard.shard_name}")
         for rec in iter_jsonl(shard.path):
             total_seen += 1
-            shard_seen += 1
             img_num_now = get_image_num(rec)
             lang_now = get_language(rec)
             lang_norm = lang_now.lower() if isinstance(lang_now, str) else None
@@ -167,7 +173,27 @@ def run_analyze(args: argparse.Namespace) -> None:
             is_zh_en = lang_norm in {"zh", "zh-cn", "zh_cn", "en", "english", "chinese"}
             if isinstance(img_num_now, int) and img_num_now > 0 and is_zh_en and layout_norm == "PARSE":
                 extra_match_count += 1
-                shard_extra_match_count += 1
+
+            # Full-dataset dimension stats (entire dataset, not per shard)
+            if isinstance(layout_now, str):
+                full_layout[layout_now] += 1
+            nd = rec.get("meta_info", {}).get("origin_pdf_nsfw_score", {}).get("decision")
+            if isinstance(nd, str):
+                full_nsfw[nd] += 1
+            if isinstance(lang_now, str):
+                full_lang[lang_now] += 1
+            cc, cn, _cs = get_main_category(rec)
+            if cc:
+                full_cat_code[cc] += 1
+            if cn:
+                full_cat_name[cn] += 1
+            tt = get_total_token(rec)
+            if isinstance(tt, int):
+                token_min_full = tt if token_min_full is None else min(token_min_full, tt)
+                token_max_full = tt if token_max_full is None else max(token_max_full, tt)
+            if isinstance(img_num_now, int):
+                img_min_full = img_num_now if img_min_full is None else min(img_min_full, img_num_now)
+                img_max_full = img_num_now if img_max_full is None else max(img_max_full, img_num_now)
 
             if len(reservoir) < reservoir_size:
                 reservoir.append(rec)
@@ -189,16 +215,6 @@ def run_analyze(args: argparse.Namespace) -> None:
 
             if args.max_records is not None and total_seen >= args.max_records:
                 break
-        per_file_stats[shard.shard_name] = {
-            "records_seen": shard_seen,
-            "extra_stats": {
-                "img_nonzero_and_lang_zh_en_and_layout_parse": {
-                    "count": shard_extra_match_count,
-                    "ratio": (shard_extra_match_count / shard_seen) if shard_seen > 0 else 0.0,
-                    "denominator": shard_seen,
-                }
-            },
-        }
         if args.max_records is not None and total_seen >= args.max_records:
             break
 
@@ -207,15 +223,15 @@ def run_analyze(args: argparse.Namespace) -> None:
         f"elapsed={time.time()-started:.1f}s"
     )
 
-    # Collect features
+    # Reservoir-only lists for histograms / sweep
     t_collect = time.time()
     token_vals: List[int] = []
     image_vals: List[int] = []
-    layout_decisions: List[str] = []
-    nsfw_decisions: List[str] = []
-    languages: List[str] = []
-    cat_codes: List[str] = []
-    cat_names: List[str] = []
+    layout_decisions_r: List[str] = []
+    nsfw_decisions_r: List[str] = []
+    languages_r: List[str] = []
+    cat_codes_r: List[str] = []
+    cat_names_r: List[str] = []
 
     cat_map = load_category_code_name_map(args.category_code_txt) if args.category_code_txt else {}
 
@@ -223,24 +239,23 @@ def run_analyze(args: argparse.Namespace) -> None:
         tt = get_total_token(rec)
         if isinstance(tt, int):
             token_vals.append(tt)
-        # image num from stats if present (avoid extra scans)
         img_num = rec.get("meta_info", {}).get("statistics_info", {}).get("clean_image_num")
         if isinstance(img_num, int):
             image_vals.append(img_num)
         ld = rec.get("meta_info", {}).get("origin_pdf_layout_score", {}).get("decision")
         if isinstance(ld, str):
-            layout_decisions.append(ld)
+            layout_decisions_r.append(ld)
         nd = rec.get("meta_info", {}).get("origin_pdf_nsfw_score", {}).get("decision")
         if isinstance(nd, str):
-            nsfw_decisions.append(nd)
+            nsfw_decisions_r.append(nd)
         lang = get_language(rec)
         if isinstance(lang, str):
-            languages.append(lang)
+            languages_r.append(lang)
         cat_code, cat_name, _cat_score = get_main_category(rec)
         if cat_code:
-            cat_codes.append(cat_code)
+            cat_codes_r.append(cat_code)
         if cat_name:
-            cat_names.append(cat_name)
+            cat_names_r.append(cat_name)
 
     overall_stats = {
         "records_seen": total_seen,
@@ -253,28 +268,44 @@ def run_analyze(args: argparse.Namespace) -> None:
         },
     }
 
+    full_stats = {
+        "layout_decisions_count": dict(full_layout),
+        "nsfw_decisions_count": dict(full_nsfw),
+        "language_count": dict(full_lang),
+        "category_code_count": dict(full_cat_code),
+        "category_name_count": dict(full_cat_name),
+        "token_total": {"min": token_min_full, "max": token_max_full},
+        "clean_image_num": {"min": img_min_full, "max": img_max_full},
+    }
+
+    reservoir_sample = {
+        "size": len(reservoir),
+        "layout_decisions_count": dict(Counter(layout_decisions_r)),
+        "nsfw_decisions_count": dict(Counter(nsfw_decisions_r)),
+        "language_count": dict(Counter(languages_r)),
+        "category_code_count": dict(Counter(cat_codes_r)),
+        "category_name_count": dict(Counter(cat_names_r)),
+        "token_total": {"min": min(token_vals) if token_vals else None, "max": max(token_vals) if token_vals else None},
+        "clean_image_num": {"min": min(image_vals) if image_vals else None, "max": max(image_vals) if image_vals else None},
+    }
+
     stats = {
+        "dataset_name": args.dataset_name,
         "reservoir_size": len(reservoir),
         "total_seen": total_seen,
-        "token_total": {"min": min(token_vals) if token_vals else None, "max": max(token_vals) if token_vals else None},
-        "image_num": {"min": min(image_vals) if image_vals else None, "max": max(image_vals) if image_vals else None},
-        "layout_decisions_count": {},
-        "nsfw_decisions_count": {},
-        "language_count": {},
-        "category_code_count": {},
-        "category_name_count": {},
+        "full_stats": full_stats,
+        "reservoir_sample": reservoir_sample,
+        # Top-level counts = full dataset (same keys as before; semantics fixed)
+        "layout_decisions_count": dict(full_layout),
+        "nsfw_decisions_count": dict(full_nsfw),
+        "language_count": dict(full_lang),
+        "category_code_count": dict(full_cat_code),
+        "category_name_count": dict(full_cat_name),
+        "token_total": {"min": token_min_full, "max": token_max_full},
+        "image_num": {"min": img_min_full, "max": img_max_full},
         "overall_stats": overall_stats,
-        "per_file_stats": per_file_stats,
-        # Backward compatibility
         "extra_stats": overall_stats["extra_stats"],
     }
-    from collections import Counter
-
-    stats["layout_decisions_count"] = Counter(layout_decisions)
-    stats["nsfw_decisions_count"] = Counter(nsfw_decisions)
-    stats["language_count"] = Counter(languages)
-    stats["category_code_count"] = Counter(cat_codes)
-    stats["category_name_count"] = Counter(cat_names)
 
     out_analysis = os.path.join(args.out_dir, "analysis")
     _maybe_mkdir(out_analysis)
@@ -321,18 +352,19 @@ def run_analyze(args: argparse.Namespace) -> None:
         plt.savefig(path)
         plt.close()
 
+    rs = stats["reservoir_sample"]
     save_hist(token_vals, os.path.join(out_analysis, "hist_clean_total_token.png"), "clean_total_token (reservoir)")
     save_hist(image_vals, os.path.join(out_analysis, "hist_clean_image_num.png"), "clean_image_num (reservoir)")
-    save_bar(stats["language_count"], os.path.join(out_analysis, "bar_language.png"), "language_fasttext.language (top)")
+    save_bar(dict(rs["language_count"]), os.path.join(out_analysis, "bar_language.png"), "language_fasttext.language (reservoir, top)")
     # Visualize category name if present; fallback to code->txt mapping; otherwise show code.
-    if stats["category_name_count"]:
+    if rs["category_name_count"]:
         save_bar(
-            stats["category_name_count"],
+            dict(rs["category_name_count"]),
             os.path.join(out_analysis, "bar_main_category_name.png"),
-            "category_name (top)",
+            "category_name (reservoir, top)",
         )
     elif cat_map:
-        top_cats = sorted(stats["category_code_count"].items(), key=lambda x: x[1], reverse=True)[:30]
+        top_cats = sorted(dict(rs["category_code_count"]).items(), key=lambda x: x[1], reverse=True)[:30]
         label_map = {code: f"{cat_map.get(code, code)}({code})" for code, _ in top_cats}
         labels = [label_map[code] for code, _ in top_cats]
         counts = [cnt for _, cnt in top_cats]
@@ -342,24 +374,24 @@ def run_analyze(args: argparse.Namespace) -> None:
             plt.figure(figsize=(14, 5))
             plt.bar(labels, counts)
             plt.xticks(rotation=90, fontsize=8)
-            plt.title("category (top by reservoir)")
+            plt.title("category (reservoir, top)")
             plt.tight_layout()
             plt.savefig(os.path.join(out_analysis, "bar_main_category_cn.png"))
             plt.close()
         except Exception:
             save_bar(
-                stats["category_code_count"],
+                dict(rs["category_code_count"]),
                 os.path.join(out_analysis, "bar_main_category_code.png"),
-                "category_code (top)",
+                "category_code (reservoir, top)",
             )
     else:
         save_bar(
-            stats["category_code_count"],
+            dict(rs["category_code_count"]),
             os.path.join(out_analysis, "bar_main_category_code.png"),
-            "category_code (top)",
+            "category_code (reservoir, top)",
         )
-    save_bar(stats["layout_decisions_count"], os.path.join(out_analysis, "bar_layout_decision.png"), "layout decision")
-    save_bar(stats["nsfw_decisions_count"], os.path.join(out_analysis, "bar_nsfw_decision.png"), "nsfw decision")
+    save_bar(dict(rs["layout_decisions_count"]), os.path.join(out_analysis, "bar_layout_decision.png"), "layout decision (reservoir)")
+    save_bar(dict(rs["nsfw_decisions_count"]), os.path.join(out_analysis, "bar_nsfw_decision.png"), "nsfw decision (reservoir)")
     _log(f"[analyze] plot stage done in {time.time() - t_plot:.1f}s")
 
     # Simple threshold sweep for token_total_min
@@ -412,6 +444,17 @@ def run_analyze(args: argparse.Namespace) -> None:
         _log(f"[analyze] sweep stage done in {time.time() - t_sweep:.1f}s")
 
     _log(f"[analyze] all done in {time.time() - t0:.1f}s -> {out_analysis}")
+
+
+def run_aggregate_stats(args: argparse.Namespace) -> None:
+    from v2_interleave_pipeline.viz.stats_aggregate import write_pooled_stats_json
+
+    ds_list = (args.datasets_list or "").strip() or None
+    out_json = (args.output_json or "").strip()
+    if not out_json:
+        out_json = os.path.join(args.out_root, "pooled_analysis_stats.json")
+    path, n = write_pooled_stats_json(args.out_root, out_json, ds_list)
+    _log(f"[aggregate-stats] datasets={n} wrote {path}")
 
 
 def run_select(args: argparse.Namespace) -> None:
@@ -601,6 +644,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     pa.set_defaults(func=lambda args: run_analyze(args))
 
+    pag = sub.add_parser(
+        "aggregate-stats",
+        help="merge per-dataset analysis/reservoir_stats.json into one JSON (N datasets + combined)",
+    )
+    pag.add_argument(
+        "--out_root",
+        required=True,
+        help="batch output root containing <dataset>/analysis/reservoir_stats.json",
+    )
+    pag.add_argument(
+        "--output_json",
+        default="",
+        help="output path (default: <out_root>/pooled_analysis_stats.json)",
+    )
+    pag.add_argument(
+        "--datasets_list",
+        default="",
+        help="optional file: one dataset basename per line (default: all subdirs with stats json)",
+    )
+    pag.set_defaults(func=lambda args: run_aggregate_stats(args))
+
     # select
     ps = sub.add_parser("select", help="select pdf_md5 with category quotas (two-phase)")
     ps.add_argument("--root", required=False, default=".")
@@ -658,6 +722,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     p = build_parser()
     args = p.parse_args()
+
+    if args.cmd == "aggregate-stats":
+        args.func(args)
+        return
 
     # Normalize paths
     dataset_root = os.path.join(args.root, args.dataset_name)
