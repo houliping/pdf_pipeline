@@ -37,6 +37,9 @@ def _to_set(x: Any) -> Optional[Set[str]]:
 def gates_from_dict(d: Dict[str, Any]) -> GatesConfig:
     ls = d.get("layout_score_min")
     ns = d.get("nsfw_score_max")
+    nge = d.get("nsfw_gate_enabled", True)
+    if not isinstance(nge, bool):
+        nge = bool(nge)
     return GatesConfig(
         min_image_num=int(d.get("min_image_num", 1)),
         max_image_num=int(d.get("max_image_num", 10**18)),
@@ -44,6 +47,7 @@ def gates_from_dict(d: Dict[str, Any]) -> GatesConfig:
         token_total_max=int(d.get("token_total_max", 10**18)),
         layout_decision_ok=_to_set(d.get("layout_decision_ok")),
         layout_score_min=float("-inf") if ls is None else float(ls),
+        nsfw_gate_enabled=nge,
         nsfw_decision_ok=_to_set(d.get("nsfw_decision_ok")),
         nsfw_score_max=float("inf") if ns is None else float(ns),
         languages_ok=_to_set(d.get("languages_ok")),

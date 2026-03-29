@@ -16,9 +16,15 @@ def _get(d: Dict[str, Any], path: Sequence[str], default: Any = None) -> Any:
 def get_image_num(record: Dict[str, Any]) -> Optional[int]:
     """
     Prefer `meta_info.statistics_info.clean_image_num`.
+    Fallback: top-level `statistics_info.clean_image_num`, then `img_cnt`.
     Fallback to counting `images` interleave slots that are not null.
     """
     val = _get(record, ["meta_info", "statistics_info", "clean_image_num"], default=None)
+    if not isinstance(val, int):
+        val = _get(record, ["statistics_info", "clean_image_num"], default=None)
+    if not isinstance(val, int):
+        ic = record.get("img_cnt")
+        val = ic if isinstance(ic, int) else None
     if isinstance(val, int):
         return val
     images = record.get("images")
@@ -33,6 +39,8 @@ def get_image_num(record: Dict[str, Any]) -> Optional[int]:
 
 def get_total_token(record: Dict[str, Any]) -> Optional[int]:
     val = _get(record, ["meta_info", "statistics_info", "clean_total_token"], default=None)
+    if not isinstance(val, int):
+        val = _get(record, ["statistics_info", "clean_total_token"], default=None)
     return val if isinstance(val, int) else None
 
 
@@ -41,7 +49,10 @@ def get_layout_decision_score(record: Dict[str, Any]) -> Tuple[Optional[str], Op
     score = _get(record, ["meta_info", "origin_pdf_layout_score", "score"], default=None)
     if isinstance(score, (int, float)):
         return decision, float(score)
-    return decision, None
+    # Some pipelines only emit decision; treat score as 0.0 for threshold checks.
+    if isinstance(decision, str):
+        return decision, 0.0
+    return None, None
 
 
 def get_nsfw_decision_score(record: Dict[str, Any]) -> Tuple[Optional[str], Optional[float]]:
@@ -49,11 +60,18 @@ def get_nsfw_decision_score(record: Dict[str, Any]) -> Tuple[Optional[str], Opti
     score = _get(record, ["meta_info", "origin_pdf_nsfw_score", "score"], default=None)
     if isinstance(score, (int, float)):
         return decision, float(score)
-    return decision, None
+    if isinstance(decision, str):
+        return decision, 0.0
+    return None, None
 
 
 def get_language(record: Dict[str, Any]) -> Optional[str]:
     lang = _get(record, ["meta_info", "language_fasttext", "language"], default=None)
+    if not isinstance(lang, str):
+        lf = record.get("language_fasttext")
+        if isinstance(lf, dict):
+            l2 = lf.get("language")
+            lang = l2 if isinstance(l2, str) else None
     return lang if isinstance(lang, str) else None
 
 
@@ -68,6 +86,8 @@ def get_main_category(record: Dict[str, Any]) -> Tuple[Optional[str], Optional[s
     Returns: (category_code, category_name, score) for the best item (max score) when list.
     """
     obj = _get(record, ["meta_info", "category_cls_v1.3"], default=None)
+    if obj is None:
+        obj = record.get("category_cls_v1.3")
 
     def parse_one(d: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[float]]:
         code = d.get("category_code")
@@ -116,7 +136,8 @@ class GatesConfig:
     layout_decision_ok: Optional[Set[str]] = None  # if None -> accept any except DROP
     layout_score_min: float = float("-inf")
 
-    # nsfw gating
+    # nsfw gating (set nsfw_gate_enabled=False to ignore NSFW entirely until labels exist)
+    nsfw_gate_enabled: bool = True
     nsfw_decision_ok: Optional[Set[str]] = None  # if None -> accept any except DROP
     nsfw_score_max: float = float("inf")
 
@@ -157,18 +178,21 @@ def passes_gates(record: Dict[str, Any], cfg: GatesConfig) -> bool:
     if layout_score < cfg.layout_score_min:
         return False
 
-    # nsfw
-    nsfw_decision, nsfw_score = get_nsfw_decision_score(record)
-    if nsfw_decision is None or nsfw_score is None:
-        return False
-    if cfg.nsfw_decision_ok is None:
-        if nsfw_decision == "DROP":
-            return False
-    else:
-        if nsfw_decision not in cfg.nsfw_decision_ok:
-            return False
-    if nsfw_score > cfg.nsfw_score_max:
-        return False
+    # nsfw (optional; toggle via gates.nsfw_gate_enabled in make-data config)
+    if cfg.nsfw_gate_enabled:
+        nsfw_decision, nsfw_score = get_nsfw_decision_score(record)
+        if nsfw_decision is None or nsfw_score is None:
+            if cfg.nsfw_decision_ok is not None:
+                return False
+        else:
+            if cfg.nsfw_decision_ok is None:
+                if nsfw_decision == "DROP":
+                    return False
+            else:
+                if nsfw_decision not in cfg.nsfw_decision_ok:
+                    return False
+            if nsfw_score > cfg.nsfw_score_max:
+                return False
 
     # language
     if cfg.languages_ok is not None:
@@ -179,6 +203,8 @@ def passes_gates(record: Dict[str, Any], cfg: GatesConfig) -> bool:
     # chapter_level filtering (use existing chapter_info presence)
     if cfg.chapter_level is not None:
         ch = record.get("meta_info", {}).get("chapter_info")
+        if not isinstance(ch, dict):
+            ch = record.get("chapter_info")
         if not isinstance(ch, dict):
             return False
         level_set: Set[int] = set()

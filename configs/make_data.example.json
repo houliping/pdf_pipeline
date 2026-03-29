@@ -9,6 +9,7 @@
     "token_total_max": 2000000,
     "layout_decision_ok": ["PARSE"],
     "layout_score_min": null,
+    "nsfw_gate_enabled": false,
     "nsfw_decision_ok": null,
     "nsfw_score_max": null,
     "languages_ok": ["en", "zh"],
