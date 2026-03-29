@@ -31,9 +31,9 @@ def _open_text_read(path: str):
         return mox.file.File(path, "r", encoding="utf-8")
     return open(path, "r", encoding="utf-8")
 
+
 from v2_interleave_pipeline.chapter_process.title_utils_v3 import TitleUtils, print_filter_res
-from v2_interleave_pipeline.chapter_process.mineru_code.enum_class import BlockType, ContentType, MakeMode
-from v2_interleave_pipeline.chapter_process.mineru_code.vlm_middle_json_mkcontent import mk_blocks_to_markdown
+from v2_interleave_pipeline.chapter_process.mineru_code.enum_class import BlockType, ContentType
 from v2_interleave_pipeline.chapter_process.utils.mineru_utils import (
     get_content_by_page_idx_and_block_listidx,
     get_images_by_middle_json,
@@ -381,18 +381,12 @@ def process_main(read_mode, jsonl_path, local_dir):
             print(f"【无标题分级】无法按章节切分！")
             continue
 
-        # 整理目录关系
         md_dir = os.path.dirname(cleaned_middle_json_path)
         pdf_name = os.path.basename(md_dir)
-        md_path = f"{md_dir}/{pdf_name}.md"
 
-        # 在线读取middle_json等
-        with _open_text_read(middle_json_path) as middle_fo, _open_text_read(md_path) as md_fo, _open_text_read(
-            cleaned_middle_json_path
-        ) as cleaned_middle_fo:
+        with _open_text_read(middle_json_path) as middle_fo, _open_text_read(cleaned_middle_json_path) as cleaned_middle_fo:
             middle_json = json.load(middle_fo)  # 目标2
             cleaned_middle_json = json.load(cleaned_middle_fo)
-            md_content = md_fo.read().strip()
 
         pdf_info_list = middle_json['pdf_info']
         cleaned_pdf_info_list = cleaned_middle_json['pdf_info']
@@ -413,23 +407,7 @@ def process_main(read_mode, jsonl_path, local_dir):
         title_util.extract_title_info()
         title_info = title_util.title_info_dict
 
-        # 验证1：middle_json到md可以额外实现。重新造一遍md，与原始md文件对比
         print(print_filter_res((list(set(title_info.keys()) - set(all_title_levels.keys())), [], [], [], []), title_info))
-        output_content = []
-        for page_info in remake_page_info_list(pdf_info_list, title_info, fixed_level=1):
-            paras_of_layout = page_info.get('para_blocks')
-            # 原始默认
-
-            page_markdown = mk_blocks_to_markdown(paras_of_layout,
-                                                  make_mode=MakeMode.MM_MD,
-                                                  formula_enable=True,
-                                                  table_enable=True,
-                                                  img_buket_path='images')
-            output_content.extend(page_markdown)
-
-        md_content_v2 = '\n\n'.join(output_content)
-        if md_content_v2 != md_content:
-            print(f"【验证1：严重错误】", md_content_v2 == md_content, md_dir)
 
         #  重新赋值标题等级
         real_pdf_info_list = remake_page_info_list(cleaned_pdf_info_list, title_info, title_levels=all_title_levels)

@@ -22,8 +22,7 @@ def _open_text_read(path: str):
 
 
 from v2_interleave_pipeline.chapter_process.title_utils_v3 import TitleUtils, print_filter_res
-from v2_interleave_pipeline.chapter_process.mineru_code.enum_class import BlockType, ContentType, MakeMode
-from v2_interleave_pipeline.chapter_process.mineru_code.vlm_middle_json_mkcontent import mk_blocks_to_markdown
+from v2_interleave_pipeline.chapter_process.mineru_code.enum_class import BlockType
 from v2_interleave_pipeline.chapter_process.utils.mineru_utils import (
     get_content_by_page_idx_and_block_listidx,
     get_images_by_middle_json,
@@ -112,17 +111,13 @@ def slice_panguml_item_to_rows(
 
     md_dir = os.path.dirname(cleaned_middle_json_path)
     pdf_name = os.path.basename(md_dir)
-    md_path = f"{md_dir}/{pdf_name}.md"
 
     try:
-        with _open_text_read(middle_json_path) as middle_fo, _open_text_read(md_path) as md_fo, _open_text_read(
-            cleaned_middle_json_path
-        ) as cleaned_middle_fo:
+        with _open_text_read(middle_json_path) as middle_fo, _open_text_read(cleaned_middle_json_path) as cleaned_middle_fo:
             middle_json = json.load(middle_fo)
             cleaned_middle_json = json.load(cleaned_middle_fo)
-            md_content = md_fo.read().strip()
     except Exception as e:
-        _vlog(params, f"读取 middle/md 失败: {e}")
+        _vlog(params, f"读取 middle 失败: {e}")
         return []
 
     pdf_info_list = middle_json["pdf_info"]
@@ -148,22 +143,6 @@ def slice_panguml_item_to_rows(
             title_info,
         ),
     )
-
-    output_content = []
-    for page_info in remake_page_info_list(pdf_info_list, title_info, fixed_level=1):
-        paras_of_layout = page_info.get("para_blocks")
-        page_markdown = mk_blocks_to_markdown(
-            paras_of_layout,
-            make_mode=MakeMode.MM_MD,
-            formula_enable=True,
-            table_enable=True,
-            img_buket_path="images",
-        )
-        output_content.extend(page_markdown)
-
-    md_content_v2 = "\n\n".join(output_content)
-    if md_content_v2 != md_content:
-        _vlog(params, f"【验证1】md 与重造不一致 {md_dir}")
 
     real_pdf_info_list = remake_page_info_list(cleaned_pdf_info_list, title_info, title_levels=all_title_levels)
 

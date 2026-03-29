@@ -3,7 +3,7 @@
 ## 你在描述里的目标（已实现 / 部分实现）
 
 1. **输入**：jsonl 行内 `meta_info.address` 的 `s3_parse_address`（原始 middle）、`s3_clean_address`（清洗后 middle），以及 `chapter_info`（标题 tid → level）。
-2. **读取**：同时打开原始 middle、清洗后 middle、同目录下 `{pdf_name}.md`；用**清洗后** `pdf_info` 做切块与 markdown 生成；用**原始** middle 做部分校验与图片类型策略。
+2. **读取**：只打开原始 middle 与清洗后 `*_cleaned_middle.json`（不再读侧车 `.md` 做校验）；用**清洗后** `pdf_info` 做切块与 markdown 生成；用**原始** middle 做部分校验与图片类型策略。
 3. **切块**：按 `chapter_info` 重标 `level` → 递归按页跨度切分 → 合并过短/缺图块。
 4. **输出**：每块 `content2panguml` → `texts` / `images` / 计数；`read_panguml` 模式下将**整条源记录** `deepcopy` 后 `update(切块字段)`，便于继承 `meta_info` 等键。
 
