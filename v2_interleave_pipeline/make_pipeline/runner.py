@@ -87,7 +87,11 @@ def run_make_data_for_dataset(
         for rec in _iter_jsonl_loose(shard.path):
             stats["lines_in"] += 1
 
-            if not passes_gates(rec, cfg.gates):
+            if not passes_gates(
+                rec,
+                cfg.gates,
+                allow_empty_chapter_info=cfg.chapter_split_enabled,
+            ):
                 stats["skipped_gate"] += 1
                 continue
             stats["lines_pass_gate"] += 1
@@ -109,6 +113,30 @@ def run_make_data_for_dataset(
             if cfg.chapter_split_enabled and cfg.chapter_read_mode == "read_panguml":
                 item = panguml_record_to_item(rec)
                 if item is not None:
+                    # If chapter_info doesn't contain the configured `chapter_level`,
+                    # we still want to keep the row and let the splitter try `chapter_level + 1`.
+                    # If `chapter_level + 1` doesn't exist either, splitter returns [] and
+                    # `emit_original_when_split_empty` will handle it.
+                    base_level = cfg.gates.chapter_level
+                    if base_level is not None:
+                        ch = rec.get("meta_info", {}).get("chapter_info")
+                        if not isinstance(ch, dict):
+                            ch = rec.get("chapter_info")
+                        if isinstance(ch, dict) and len(ch) > 0:
+                            level_set: Set[int] = set()
+                            for v in ch.values():
+                                try:
+                                    level_set.add(int(v))
+                                except (TypeError, ValueError):
+                                    pass
+
+                            if base_level in level_set:
+                                item["input_level_start"] = base_level
+                                item["input_level_max"] = None
+                            else:
+                                item["input_level_start"] = base_level + 1
+                                item["input_level_max"] = base_level + 1
+
                     try:
                         rows = slice_panguml_item_to_rows(
                             item,

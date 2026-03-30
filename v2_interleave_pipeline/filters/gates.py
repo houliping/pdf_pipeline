@@ -148,7 +148,12 @@ class GatesConfig:
     chapter_level: Optional[int] = None
 
 
-def passes_gates(record: Dict[str, Any], cfg: GatesConfig) -> bool:
+def passes_gates(
+    record: Dict[str, Any],
+    cfg: GatesConfig,
+    *,
+    allow_empty_chapter_info: bool = False,
+) -> bool:
     # images
     img_num = get_image_num(record)
     if img_num is None:
@@ -206,6 +211,15 @@ def passes_gates(record: Dict[str, Any], cfg: GatesConfig) -> bool:
         if not isinstance(ch, dict):
             ch = record.get("chapter_info")
         if not isinstance(ch, dict):
+            # Some pools don't provide chapter structure at all.
+            # When chapter_split_enabled is on, we want to keep such rows
+            # and let the splitter fall back to `emit_original_when_split_empty`.
+            if allow_empty_chapter_info:
+                return True
+            return False
+        if len(ch) == 0:
+            if allow_empty_chapter_info:
+                return True
             return False
         level_set: Set[int] = set()
         for v in ch.values():
@@ -214,6 +228,10 @@ def passes_gates(record: Dict[str, Any], cfg: GatesConfig) -> bool:
             except (TypeError, ValueError):
                 pass
         if cfg.chapter_level not in level_set:
+            # When caller enables fallback behavior, allow this row to pass gates.
+            # The splitter will decide whether to start from (chapter_level + 1).
+            if allow_empty_chapter_info:
+                return True
             return False
 
     return True

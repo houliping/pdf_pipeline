@@ -99,7 +99,13 @@ def slice_panguml_item_to_rows(
     min_imgs_count = params.min_imgs_count
     min_texts_len = params.min_texts_len
 
-    input_level = 1
+    input_level = int(item.get("input_level_start", 1))
+    # If not None, we will only attempt titles up to (and including) this level.
+    # This matches the rule: when configured `chapter_level` is missing, only
+    # try `chapter_level + 1`, and if that level is also missing, skip.
+    max_input_level = item.get("input_level_max", None)
+    if max_input_level is not None:
+        max_input_level = int(max_input_level)
     middle_json_path = item["middle_json_path"]
     cleaned_middle_json_path = item["cleaned_middle_json_path"]
     all_title_levels = item["title_levels"]
@@ -162,6 +168,9 @@ def slice_panguml_item_to_rows(
 
     main_title_idxs = get_title_idxs_by_level(input_level, all_title_levels)
     while not main_title_idxs:
+        if max_input_level is not None and input_level >= max_input_level:
+            _vlog(params, f"【标题分级缺失】尝试level到达上限({max_input_level})仍为空，跳过")
+            return []
         _vlog(params, f"第{input_level}级标题为空，下移一级")
         input_level += 1
         main_title_idxs = get_title_idxs_by_level(input_level, all_title_levels)
