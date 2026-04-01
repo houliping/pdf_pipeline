@@ -10,7 +10,7 @@ import os
 import json
 import ast
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from collections import defaultdict
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -139,6 +139,13 @@ def read_jsonl_from_panguml_jsonl(jsonl_path):
                         title_levels[int(k)] = int(v)
                     except (TypeError, ValueError):
                         continue
+                # 新增：构建图片路径 -> 图片完整信息的映射，用于后续回填 width/height 等
+                images_map: Dict[str, Dict[str, Any]] = {}
+                for img in item.get("images") or []:
+                    if isinstance(img, dict):
+                        rel_path = img.get("relative_img_path")
+                        if isinstance(rel_path, str) and rel_path:
+                            images_map[rel_path] = img
                 jsonl_data.append(
                     {
                         "middle_json_path": addr["s3_parse_address"],
@@ -149,6 +156,8 @@ def read_jsonl_from_panguml_jsonl(jsonl_path):
                         "images": item["images"],
                         "img_cnt": item["img_cnt"],
                         "text_cnt": item["text_cnt"],
+                        "images_map": images_map,
+                        "page_location": item.get("page_location"),
                         "source_record": item,
                     }
                 )
@@ -195,8 +204,8 @@ def get_title_idxs_by_level_and_bounds(level, bounds, title_info, all_title_leve
         info = title_info[tid]
         current_pos = (info.page_idx, info.block_listidx)
 
-        # 位置是否匹配。TODO 待确认
-        if left_bound <= current_pos <= right_bound:
+        # 新增：开区间匹配，避免边界标题重复归属
+        if left_bound < current_pos < right_bound:
             target_tids.append(tid)
 
     return sorted(target_tids)
@@ -298,12 +307,36 @@ def remake_images_key(panguml_json, pdf_name):
         image["relative_img_path"] = f"{pdf_name}/{os.path.basename(false_path)}"
 
     return panguml_json
+
+
+def reflect_image_w_h(panguml_json, images_map: Dict[str, Dict[str, Any]]):
+    """
+    新增：用源行 images 的完整字段回填切块后图片（如 width/height）。
+    """
+    images = panguml_json.get("images", [])
+    for i, image_item in enumerate(images):
+        if image_item is None:
+            continue
+        rel_path = image_item.get("relative_img_path")
+        if isinstance(rel_path, str) and rel_path in images_map:
+            images[i] = images_map[rel_path]
+    return panguml_json
 # ----------------------------
 # 3. 主函数
 # ----------------------------
 
-def process_main(read_mode, jsonl_path, local_dir):
-    """主入口函数"""
+def process_main(
+    read_mode,
+    jsonl_path,
+    local_dir,
+    min_page_num: int = 15,
+    max_page_num: int = 100,
+    min_imgs_count: int = 1,
+    min_texts_len: int = 100,
+    max_level: int = 4,
+    write_tar: bool = False,
+):
+    """主入口函数（参数化版本）"""
     # ============== 步骤一：获取处理的middle_json和分级结果对 ==============
     if read_mode == "read_model":
         # 方法一：读取模型输出JSONL，并构造分级结果
@@ -345,11 +378,7 @@ def process_main(read_mode, jsonl_path, local_dir):
 
     一条数据的“文字+图片”:大部分在8k，可接受1M
     """
-    min_page_num = 15  # 按章节切分的最小页数
-    max_page_num = 100
-    min_imgs_count = 1
-    min_texts_len = 100  # 纯文字，排除图片、表格
-    write_tar = False   # 是否写tar
+    # 以上阈值由函数参数控制
 
     local_download_dir = os.path.join(local_dir, "download_dir")
     local_output_dir = os.path.join(local_dir, "output_dir")
@@ -429,10 +458,13 @@ def process_main(read_mode, jsonl_path, local_dir):
 
         # 确定初始切分级别和标题id，预防第1级没标题
         main_title_idxs = get_title_idxs_by_level(input_level, all_title_levels)  # 切分的基准
-        while not main_title_idxs:
+        while input_level <= max_level and not main_title_idxs:
             print(f"【重大警告】 取第{input_level}级标题为空，则下移一级")
             input_level += 1
             main_title_idxs = get_title_idxs_by_level(input_level, all_title_levels)  # 切分的基准
+        if not main_title_idxs:
+            print(f"【无可用标题】1~{max_level}级均为空，跳过: {id}")
+            continue
 
         main_title_idxs.sort(reverse=False)  # 排序
 
@@ -457,7 +489,7 @@ def process_main(read_mode, jsonl_path, local_dir):
 
             # 1. 达到预设的最大深度（如4级），不再向下切，直接保留
             left_bound, right_bound, parent_tid, cblocks_level = cblock
-            if cblocks_level == 4:
+            if cblocks_level == max_level:
                 slice_cblocks.append(cblock)
                 continue
 
@@ -568,8 +600,10 @@ def process_main(read_mode, jsonl_path, local_dir):
                 False, formula_enable=enable_formula, table_enable=enable_table
             )
             slice_item = content2panguml(mid_contents, "", "", False)
-            slice_item = remake_images_key(slice_item, pdf_name)
             if slice_item is not None:
+                slice_item = remake_images_key(slice_item, pdf_name)
+                if item.get("images_map"):
+                    slice_item = reflect_image_w_h(slice_item, item["images_map"])
                 # 更新字段
                 slice_item["page_location"] = (f_start, f_end)
                 slice_item["id"] = f"{id}_chapter_{idx}"    # chapter实则为第几段
